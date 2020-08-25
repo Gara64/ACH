@@ -38,14 +38,14 @@ const generateRandomValues = (nValues, totalValueToReach) => {
   return values
 }
 
-// const generateRandomWeeklyDataSeries = weeklyDataSeries => {
-//   const dailyDataSeries = []
-//   for (let i = 0; i < monthlyDataSeries.dates.length; i++) {
-//     const serie = monthlyDataSeries.series.filter(
+// const generateRandomWeeklydataserie = weeklydataserie => {
+//   const dailydataserie = []
+//   for (let i = 0; i < monthlydataserie.dates.length; i++) {
+//     const serie = monthlydataserie.series.filter(
 //       serie => serie.type === 'gas' || serie.type === 'electricity'
 //     )[0]
 //     const consumptionMonth = serie.values[i]
-//     const startDateISO = parseISO(monthlyDataSeries.dates[i])
+//     const startDateISO = parseISO(monthlydataserie.dates[i])
 //     const endDateISO = lastDayOfMonth(startDateISO)
 //     const weeksInMonth = eachWeekOfInterval({
 //       start: startDateISO,
@@ -63,43 +63,44 @@ const generateRandomValues = (nValues, totalValueToReach) => {
 //       dates: weeksInMonth,
 //       series
 //     }
-//     weeklyDataSeries.push(weeklyDataSerie)
+//     weeklydataserie.push(weeklyDataSerie)
 //   }
 // }
 
-const generateRandomDailyDataSeries = (monthlyDataSeries, energyType) => {
-  const dailyDataSeries = []
-  const serie = monthlyDataSeries.series.filter(
-    serie => serie.type === energyType
-  )[0]
-  for (let i = 0; i < monthlyDataSeries.dates.length; i++) {
-    const consumptionMonth = serie.values[i]
-    const startDateISO = parseISO(monthlyDataSeries.dates[i])
-    const endDateISO = formatISO(lastDayOfMonth(startDateISO), { representation: 'date' })
-    console.log('start : ', startDateISO)
-    console.log('end : ', endDateISO)
+/*
+TODO: better understand date format and timezones...
+*/
+const generateRandomDailydataserie = monthlydataserie => {
+  const dailydataserie = []
+
+  for (let i = 0; i < monthlydataserie.dates.length; i++) {
+    const consumptionMonth = monthlydataserie.values[i]
+    const startDateISO = parseISO(monthlydataserie.dates[i])
+    const endDateISO = formatISO(lastDayOfMonth(startDateISO), {
+      representation: 'date'
+    })
     const daysInMonth = eachDayOfInterval({
       start: startDateISO,
       end: new Date(endDateISO)
-    }).map(date => formatISO(date, {representation: 'date'}))
-    
+    }).map(date => formatISO(date, { representation: 'date' }))
+
     const daysValues = generateRandomValues(
       daysInMonth.length,
       consumptionMonth
     )
-    const series = [{ type: serie.type, values: daysValues }]
     const dayDataSerie = {
       startDate: startDateISO,
       endDate: new Date(endDateISO),
       dates: daysInMonth.map(date => new Date(date)),
-      series
+      values: daysValues,
+      type: monthlydataserie.type
     }
-    dailyDataSeries.push(dayDataSerie)
+    dailydataserie.push(dayDataSerie)
   }
-  return dailyDataSeries
+  return dailydataserie
 }
 
-const extractEnergyDataSeries = (consumptionData, statementReason, type) => {
+const extractEnergydataserie = (consumptionData, statementReason, type) => {
   const serieValues = consumptionData
     .filter(entry => entry.statementReason === statementReason)
     .map(entry => {
@@ -110,22 +111,25 @@ const extractEnergyDataSeries = (consumptionData, statementReason, type) => {
       }
     })
     .sort(sortByDate)
-  const series = [
-    {
-      values: serieValues.map(e => e.value),
-      type: type
-    },
-    {
-      values: serieValues.map(e => e.cost),
-      type: 'money'
-    }
-  ]
-  return {
+
+  const serieId = serieValues[0].date // serieId should be unique, the date is not
+  const energyTS = {
     startDate: serieValues[0].date,
     endDate: serieValues[serieValues.length - 1].date,
     dates: serieValues.map(e => e.date),
-    series
+    values: serieValues.map(e => e.value),
+    type,
+    serieId
   }
+  const moneyTS = {
+    startDate: serieValues[0].date,
+    endDate: serieValues[serieValues.length - 1].date,
+    dates: serieValues.map(e => e.date),
+    values: serieValues.map(e => e.value),
+    type: 'money',
+    serieId
+  }
+  return { energy: energyTS, money: moneyTS }
 }
 
 // utils.extractEnergyDataPoints = (consumptionData, statementReason, type) => {
@@ -141,62 +145,49 @@ const extractEnergyDataSeries = (consumptionData, statementReason, type) => {
 //     .sort(sortByDate)
 // }
 
-utils.createEnergyDailyTS = async (
-  client,
-  monthlyDataSeries,
-  energyType,
-  dryRun
-) => {
-  const dailyDataSeries = generateRandomDailyDataSeries(
-    monthlyDataSeries,
-    energyType
-  )
+utils.createEnergyDailyTS = async (client, monthlydataserie, dryRun) => {
+  const dailydataserie = generateRandomDailydataserie(monthlydataserie)
   if (!dryRun) {
-    dailyDataSeries.map(async dataseries => {
+    dailydataserie.map(async dataserie => {
       const energyTS = await client.save({
         _type: ENEDIS_TS_DOCTYPE,
-        dataseries,
+        dataserie,
         dbSource: ENEDIS_TS_DOCTYPE,
         dataSource: 'Enedis'
       })
       log(
         'info',
-        `Created daily ${energyType} time series on ${ENEDIS_TS_DOCTYPE} with ids ${energyTS.data._id}`
+        `Created daily ${monthlydataserie.type} time series on ${ENEDIS_TS_DOCTYPE} with ids ${energyTS.data._id}`
       )
     })
   } else {
     log(
       'info',
-      `Would have created daily ${
-        dailyDataSeries.length
-      } ${energyType} time series on ${ENEDIS_TS_DOCTYPE} from ${dailyDataSeries[0].startDate.toISOString()} to ${dailyDataSeries[
-        dailyDataSeries.length - 1
+      `Would have created daily ${dailydataserie.length} ${
+        monthlydataserie.type
+      } time series on ${ENEDIS_TS_DOCTYPE} from ${dailydataserie[0].startDate.toISOString()} to ${dailydataserie[
+        dailydataserie.length - 1
       ].endDate.toISOString()}`
     )
   }
 }
 
-utils.createEnergyMonthlyTS = async (
-  client,
-  dataseries,
-  energyType,
-  dryRun
-) => {
+utils.createEnergyMonthlyTS = async (client, dataserie, dryRun) => {
   if (!dryRun) {
-    const elecTS = await client.save({
+    const energyTS = await client.save({
       _type: EDF_TS_DOCTYPE,
-      dataseries,
+      dataserie,
       dbSource: EDF_TS_DOCTYPE,
       dataSource: 'EDF'
     })
     log(
       'info',
-      `Created monthly ${energyType} time serie on ${EDF_TS_DOCTYPE} with id ${elecTS.data._id}`
+      `Created monthly ${dataserie.type} time serie on ${EDF_TS_DOCTYPE} with id ${energyTS.data._id}`
     )
   } else {
     log(
       'info',
-      `Would have created monthly ${energyType} time serie on ${EDF_TS_DOCTYPE} from ${dataseries.startDate} to ${dataseries.endDate}`
+      `Would have created monthly ${dataserie.type} time serie on ${EDF_TS_DOCTYPE} from ${dataserie.startDate} to ${dataserie.endDate}`
     )
   }
 }
@@ -206,25 +197,26 @@ utils.run = async (api, client, dryRun) => {
   await api.createDoctype(ENEDIS_TS_DOCTYPE)
 
   const consumptionData = edfData['org.fing.mesinfos.consumptionstatement']
-  const elecDataSerie = extractEnergyDataSeries(
+  const elecDataSeries = extractEnergydataserie(
     consumptionData,
     'EdeliaMonthlyElecConsumption',
     'electricity'
   )
-  const gasDataSerie = extractEnergyDataSeries(
+  const elecEnergyDS = elecDataSeries.energy
+  const elecMoneyDS = elecDataSeries.money
+  const gasDataSerie = extractEnergydataserie(
     consumptionData,
     'EdeliaMonthlyGasConsumption',
     'gas'
   )
-  await utils.createEnergyMonthlyTS(
-    client,
-    elecDataSerie,
-    'electricity',
-    dryRun
-  )
-  await utils.createEnergyMonthlyTS(client, gasDataSerie, 'gas', dryRun)
-  await utils.createEnergyDailyTS(client, elecDataSerie, 'electricity', dryRun)
-  await utils.createEnergyDailyTS(client, gasDataSerie, 'gas', dryRun)
+  const gasEnergyDS = gasDataSerie.energy
+  const gasMoneyDS = gasDataSerie.money
+  await utils.createEnergyMonthlyTS(client, elecEnergyDS, dryRun)
+  await utils.createEnergyMonthlyTS(client, elecMoneyDS, dryRun)
+  await utils.createEnergyMonthlyTS(client, gasEnergyDS, dryRun)
+  await utils.createEnergyMonthlyTS(client, gasMoneyDS, dryRun)
+  await utils.createEnergyDailyTS(client, elecEnergyDS, dryRun)
+  await utils.createEnergyDailyTS(client, gasEnergyDS, dryRun)
 
   return
 }
